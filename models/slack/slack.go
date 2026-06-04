@@ -40,9 +40,10 @@ type Config struct {
 	// WebhookURL is a Slack incoming webhook URL. Simpler than a bot token, but
 	// the destination channel is fixed by the webhook itself.
 	WebhookURL string `json:"webhook_url,omitempty"`
-	// DefaultChannel is used when a DoCommand does not specify "channel". Only
-	// applies to the bot token path.
-	DefaultChannel string `json:"default_channel,omitempty"`
+	// DefaultChannelID is used when a DoCommand does not specify "channel_id".
+	// Only applies to the bot token path. Use a Slack channel ID (e.g.
+	// "C0123456789"), not a channel name.
+	DefaultChannelID string `json:"default_channel_id,omitempty"`
 }
 
 // Validate ensures exactly one credential is configured.
@@ -101,10 +102,10 @@ func (s *slack) DoCommand(ctx context.Context, cmd map[string]interface{}) (map[
 }
 
 // Send posts a message to Slack. Recognized payload keys:
-//   - "channel"   (string) channel id or name; defaults to default_channel (bot token only)
-//   - "text"      (string) message text
-//   - "blocks"    (array)  Slack Block Kit blocks, passed through as-is
-//   - "thread_ts" (string) reply within a thread (bot token only)
+//   - "channel_id" (string) Slack channel ID; defaults to default_channel_id (bot token only)
+//   - "text"       (string) message text
+//   - "blocks"     (array)  Slack Block Kit blocks, passed through as-is
+//   - "thread_ts"  (string) reply within a thread (bot token only)
 //
 // Either "text" or "blocks" must be present.
 func (s *slack) Send(ctx context.Context, payload map[string]interface{}) (map[string]interface{}, error) {
@@ -121,15 +122,15 @@ func (s *slack) Send(ctx context.Context, payload map[string]interface{}) (map[s
 }
 
 func (s *slack) sendBotMessage(ctx context.Context, payload map[string]interface{}, text string, blocks interface{}) (map[string]interface{}, error) {
-	channel, _ := payload["channel"].(string)
-	if channel == "" {
-		channel = s.cfg.DefaultChannel
+	channelID, _ := payload["channel_id"].(string)
+	if channelID == "" {
+		channelID = s.cfg.DefaultChannelID
 	}
-	if channel == "" {
-		return nil, errors.New(`slack: "channel" is required (no default_channel configured)`)
+	if channelID == "" {
+		return nil, errors.New(`slack: "channel_id" is required (no default_channel_id configured)`)
 	}
 
-	body := map[string]interface{}{"channel": channel}
+	body := map[string]interface{}{"channel": channelID}
 	if text != "" {
 		body["text"] = text
 	}

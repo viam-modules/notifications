@@ -22,7 +22,7 @@ func TestValidate(t *testing.T) {
 		"both credentials":    {Config{BotToken: "xoxb-1", WebhookURL: "https://h"}, true},
 		"bot token only":      {Config{BotToken: "xoxb-1"}, false},
 		"webhook only":        {Config{WebhookURL: "https://h"}, false},
-		"bot with default ch": {Config{BotToken: "xoxb-1", DefaultChannel: "#a"}, false},
+		"bot with default ch": {Config{BotToken: "xoxb-1", DefaultChannelID: "C0A"}, false},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -60,9 +60,9 @@ func TestSendBotMessage(t *testing.T) {
 	s.postURL = srv.URL
 
 	res, err := s.Send(context.Background(), map[string]interface{}{
-		"channel":   "#alerts",
-		"text":      "hello",
-		"thread_ts": "111.222",
+		"channel_id": "C0ALERTS",
+		"text":       "hello",
+		"thread_ts":  "111.222",
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -71,7 +71,7 @@ func TestSendBotMessage(t *testing.T) {
 	if gotAuth != "Bearer xoxb-secret" {
 		t.Fatalf("missing/wrong auth header: %q", gotAuth)
 	}
-	if gotBody["channel"] != "#alerts" || gotBody["text"] != "hello" || gotBody["thread_ts"] != "111.222" {
+	if gotBody["channel"] != "C0ALERTS" || gotBody["text"] != "hello" || gotBody["thread_ts"] != "111.222" {
 		t.Fatalf("request body not as expected: %v", gotBody)
 	}
 	if res["ok"] != true || res["ts"] != "123.456" || res["channel"] != "C42" {
@@ -88,13 +88,13 @@ func TestSendBotMessageUsesDefaultChannel(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	s := newSlackResource(&Config{BotToken: "xoxb-1", DefaultChannel: "#default"}, testLogger())
+	s := newSlackResource(&Config{BotToken: "xoxb-1", DefaultChannelID: "C0DEFAULT"}, testLogger())
 	s.postURL = srv.URL
 
 	if _, err := s.Send(context.Background(), map[string]interface{}{"text": "hi"}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if gotBody["channel"] != "#default" {
+	if gotBody["channel"] != "C0DEFAULT" {
 		t.Fatalf("expected default channel to be used, got %v", gotBody["channel"])
 	}
 }
@@ -104,7 +104,7 @@ func TestSendBotMessageMissingChannel(t *testing.T) {
 	s.postURL = "http://unused.invalid"
 	_, err := s.Send(context.Background(), map[string]interface{}{"text": "hi"})
 	if err == nil {
-		t.Fatal("expected error when no channel and no default_channel")
+		t.Fatal("expected error when no channel_id and no default_channel_id")
 	}
 }
 
@@ -115,7 +115,7 @@ func TestSendBotMessageSlackError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	s := newSlackResource(&Config{BotToken: "xoxb-1", DefaultChannel: "#nope"}, testLogger())
+	s := newSlackResource(&Config{BotToken: "xoxb-1", DefaultChannelID: "C0NOPE"}, testLogger())
 	s.postURL = srv.URL
 
 	_, err := s.Send(context.Background(), map[string]interface{}{"text": "hi"})

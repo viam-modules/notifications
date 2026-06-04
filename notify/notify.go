@@ -13,7 +13,7 @@ import (
 
 // Sender delivers a single notification described by a free-form payload and
 // returns a free-form result. Each backend interprets the payload keys it
-// understands. For example, slack reads "channel"/"text"; an email backend
+// understands. For example, slack reads "channel_id"/"text"; an email backend
 // would read "to"/"subject"/"body".
 type Sender interface {
 	Send(ctx context.Context, payload map[string]interface{}) (map[string]interface{}, error)

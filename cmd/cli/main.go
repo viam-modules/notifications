@@ -24,7 +24,7 @@ func realMain() error {
 	// future backend (email, sms, ...) to test it the same way.
 	sender := slack.New(&slack.Config{
 		// BotToken: "xoxb-...",
-		// DefaultChannel: "#general",
+		// DefaultChannelID: "C0123456789",
 	}, logger)
 
 	_, err := sender.Send(ctx, map[string]interface{}{

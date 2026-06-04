@@ -46,7 +46,7 @@ Configure exactly one of `bot_token` or `webhook_url`.
 ```json
 {
   "bot_token": "xoxb-your-slack-bot-token",
-  "default_channel": "#alerts"
+  "default_channel_id": "C0123456789"
 }
 ```
 
@@ -64,7 +64,7 @@ or, using an incoming webhook:
 |-------------------|--------|----------------------------|-----------------------------------------------------------------------------|
 | `bot_token`       | string | Required (one credential)  | Slack bot OAuth token (`xoxb-...`). Posts via `chat.postMessage`.            |
 | `webhook_url`     | string | Required (one credential)  | Slack incoming webhook URL. Channel is fixed by the webhook.                 |
-| `default_channel` | string | Optional                   | Channel used when a `DoCommand` omits `channel` (bot token only).            |
+| `default_channel_id` | string | Optional                | Channel ID used when a `DoCommand` omits `channel_id` (bot token only).      |
 
 ### DoCommand
 
@@ -75,10 +75,10 @@ Send a message by calling `DoCommand`. The optional `command` key defaults to
 
 | Key         | Type   | Description                                                                 |
 |-------------|--------|-----------------------------------------------------------------------------|
-| `text`      | string | Message text. Required unless `blocks` is provided.                          |
-| `blocks`    | array  | Slack [Block Kit](https://api.slack.com/block-kit) blocks, passed through.   |
-| `channel`   | string | Channel id or name. Overrides `default_channel` (bot token only).           |
-| `thread_ts` | string | Timestamp of a parent message to reply in-thread (bot token only).          |
+| `text`       | string | Message text. Required unless `blocks` is provided.                          |
+| `blocks`     | array  | Slack [Block Kit](https://api.slack.com/block-kit) blocks, passed through.   |
+| `channel_id` | string | Slack channel ID. Overrides `default_channel_id` (bot token only).          |
+| `thread_ts`  | string | Timestamp of a parent message to reply in-thread (bot token only).          |
 
 #### Example DoCommand
 
@@ -86,7 +86,7 @@ Simple text message:
 
 ```json
 {
-  "channel": "#alerts",
+  "channel_id": "C0123456789",
   "text": "Deployment finished successfully :white_check_mark:"
 }
 ```
@@ -95,7 +95,7 @@ Block Kit message in a thread:
 
 ```json
 {
-  "channel": "#alerts",
+  "channel_id": "C0123456789",
   "thread_ts": "1700000000.000100",
   "text": "Build failed",
   "blocks": [
