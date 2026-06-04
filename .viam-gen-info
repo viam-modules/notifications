@@ -1,0 +1,13 @@
+{
+  "module_name": "notifications",
+  "visibility": "public",
+  "namespace": "viam",
+  "language": "go",
+  "resource_type": "service",
+  "resource_subtype": "generic",
+  "model_name": "slack",
+  "initialize_git": false,
+  "generator_version": "0.1.0",
+  "generated_on": "2026-06-04T17:14:37.597884Z",
+  "module_readme_link": "README.md"
+}

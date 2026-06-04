@@ -1,0 +1,47 @@
+
+GO_BUILD_ENV :=
+GO_BUILD_FLAGS :=
+MODULE_BINARY := bin/notifications
+
+ifeq ($(VIAM_TARGET_OS), windows)
+	GO_BUILD_ENV += GOOS=windows GOARCH=amd64
+	GO_BUILD_FLAGS := -tags no_cgo
+	MODULE_BINARY = bin/notifications.exe
+endif
+
+GO_SOURCES := $(shell find . -type f -name '*.go')
+
+$(MODULE_BINARY): Makefile go.mod $(GO_SOURCES)
+	GOOS=$(VIAM_BUILD_OS) GOARCH=$(VIAM_BUILD_ARCH) $(GO_BUILD_ENV) go build $(GO_BUILD_FLAGS) -o $(MODULE_BINARY) cmd/module/main.go
+
+GOLANGCI_LINT_VERSION := v2.12.2
+
+lint:
+	gofmt -s -w .
+	go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION) run
+
+update:
+	go get go.viam.com/rdk@latest
+	go mod tidy
+
+test:
+	go test ./...
+
+FIRST_RUN := $(shell jq -r '.first_run // empty' meta.json 2>/dev/null)
+TAR_FILES := meta.json $(MODULE_BINARY)
+ifneq ($(FIRST_RUN),)
+TAR_FILES += $(FIRST_RUN)
+endif
+
+module.tar.gz: meta.json $(MODULE_BINARY)
+ifneq ($(VIAM_TARGET_OS), windows)
+	strip $(MODULE_BINARY)
+endif
+	tar czf $@ $(TAR_FILES)
+
+module: test module.tar.gz
+
+all: test module.tar.gz
+
+setup:
+	go mod tidy
