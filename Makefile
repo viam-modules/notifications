@@ -14,8 +14,11 @@ GO_SOURCES := $(shell find . -type f -name '*.go')
 $(MODULE_BINARY): Makefile go.mod $(GO_SOURCES)
 	GOOS=$(VIAM_BUILD_OS) GOARCH=$(VIAM_BUILD_ARCH) $(GO_BUILD_ENV) go build $(GO_BUILD_FLAGS) -o $(MODULE_BINARY) cmd/module/main.go
 
+GOLANGCI_LINT_VERSION := v2.12.2
+
 lint:
 	gofmt -s -w .
+	go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION) run
 
 update:
 	go get go.viam.com/rdk@latest

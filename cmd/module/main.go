@@ -1,3 +1,5 @@
+// Command module is the Viam module entrypoint; it registers every
+// notification model the module provides.
 package main
 
 import (

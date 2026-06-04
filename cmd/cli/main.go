@@ -8,7 +8,6 @@ import (
 	"go.viam.com/rdk/logging"
 
 	"notifications/models/slack"
-	"notifications/notify"
 )
 
 func main() {
@@ -23,7 +22,7 @@ func realMain() error {
 
 	// Pick a Sender implementation and drive it directly. Swap slack.New for a
 	// future backend (email, sms, ...) to test it the same way.
-	var sender notify.Sender = slack.New(&slack.Config{
+	sender := slack.New(&slack.Config{
 		// BotToken: "xoxb-...",
 		// DefaultChannel: "#general",
 	}, logger)

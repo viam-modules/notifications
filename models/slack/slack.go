@@ -69,20 +69,23 @@ type slack struct {
 	postURL string
 }
 
-func newSlack(ctx context.Context, deps resource.Dependencies, rawConf resource.Config, logger logging.Logger) (resource.Resource, error) {
+func newSlack(_ context.Context, _ resource.Dependencies, rawConf resource.Config, logger logging.Logger) (resource.Resource, error) {
 	conf, err := resource.NativeConfig[*Config](rawConf)
 	if err != nil {
 		return nil, err
 	}
-	s := New(conf, logger)
+	s := newSlackResource(conf, logger)
 	s.Named = rawConf.ResourceName().AsNamed()
 	return s, nil
 }
 
-// New constructs a Slack notifier directly from a Config. It is used both by the
-// Viam constructor and by callers (such as the cli harness) that want to drive
-// the Sender without a running machine.
-func New(cfg *Config, logger logging.Logger) *slack {
+// New constructs a Slack notifier directly from a Config, for callers (such as
+// the cli harness) that want to drive the Sender without a running machine.
+func New(cfg *Config, logger logging.Logger) notify.Sender {
+	return newSlackResource(cfg, logger)
+}
+
+func newSlackResource(cfg *Config, logger logging.Logger) *slack {
 	return &slack{
 		logger:  logger,
 		cfg:     cfg,
@@ -192,7 +195,7 @@ func (s *slack) post(ctx context.Context, url string, body map[string]interface{
 	if err != nil {
 		return nil, fmt.Errorf("slack: request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {

@@ -11,7 +11,7 @@ type fakeSender struct {
 	payload map[string]interface{}
 }
 
-func (f *fakeSender) Send(ctx context.Context, payload map[string]interface{}) (map[string]interface{}, error) {
+func (f *fakeSender) Send(_ context.Context, payload map[string]interface{}) (map[string]interface{}, error) {
 	f.called = true
 	f.payload = payload
 	return map[string]interface{}{"ok": true}, nil

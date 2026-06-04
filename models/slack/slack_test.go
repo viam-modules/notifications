@@ -56,7 +56,7 @@ func TestSendBotMessage(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	s := New(&Config{BotToken: "xoxb-secret"}, testLogger())
+	s := newSlackResource(&Config{BotToken: "xoxb-secret"}, testLogger())
 	s.postURL = srv.URL
 
 	res, err := s.Send(context.Background(), map[string]interface{}{
@@ -88,7 +88,7 @@ func TestSendBotMessageUsesDefaultChannel(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	s := New(&Config{BotToken: "xoxb-1", DefaultChannel: "#default"}, testLogger())
+	s := newSlackResource(&Config{BotToken: "xoxb-1", DefaultChannel: "#default"}, testLogger())
 	s.postURL = srv.URL
 
 	if _, err := s.Send(context.Background(), map[string]interface{}{"text": "hi"}); err != nil {
@@ -100,7 +100,7 @@ func TestSendBotMessageUsesDefaultChannel(t *testing.T) {
 }
 
 func TestSendBotMessageMissingChannel(t *testing.T) {
-	s := New(&Config{BotToken: "xoxb-1"}, testLogger())
+	s := newSlackResource(&Config{BotToken: "xoxb-1"}, testLogger())
 	s.postURL = "http://unused.invalid"
 	_, err := s.Send(context.Background(), map[string]interface{}{"text": "hi"})
 	if err == nil {
@@ -109,13 +109,13 @@ func TestSendBotMessageMissingChannel(t *testing.T) {
 }
 
 func TestSendBotMessageSlackError(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		// Slack returns HTTP 200 with ok=false on logical failures.
 		_, _ = w.Write([]byte(`{"ok":false,"error":"channel_not_found"}`))
 	}))
 	defer srv.Close()
 
-	s := New(&Config{BotToken: "xoxb-1", DefaultChannel: "#nope"}, testLogger())
+	s := newSlackResource(&Config{BotToken: "xoxb-1", DefaultChannel: "#nope"}, testLogger())
 	s.postURL = srv.URL
 
 	_, err := s.Send(context.Background(), map[string]interface{}{"text": "hi"})
