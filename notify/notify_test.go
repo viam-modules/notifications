@@ -17,6 +17,19 @@ func (f *fakeSender) Send(_ context.Context, payload map[string]interface{}) (ma
 	return map[string]interface{}{"ok": true}, nil
 }
 
+// fakeReactor implements both Sender and Reactor.
+type fakeReactor struct {
+	fakeSender
+	reacted bool
+	payload map[string]interface{}
+}
+
+func (f *fakeReactor) React(_ context.Context, payload map[string]interface{}) (map[string]interface{}, error) {
+	f.reacted = true
+	f.payload = payload
+	return map[string]interface{}{"ok": true}, nil
+}
+
 func TestHandleDoCommand(t *testing.T) {
 	ctx := context.Background()
 
@@ -55,6 +68,30 @@ func TestHandleDoCommand(t *testing.T) {
 		}
 		if f.called {
 			t.Fatal("Send should not be called for unknown command")
+		}
+	})
+
+	t.Run("react routes to Reactor", func(t *testing.T) {
+		f := &fakeReactor{}
+		got, err := HandleDoCommand(ctx, f, map[string]interface{}{"command": "react", "name": "white_check_mark"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !f.reacted {
+			t.Fatal("expected React to be called")
+		}
+		if got["ok"] != true {
+			t.Fatalf("expected ok=true, got %v", got)
+		}
+		if f.payload["name"] != "white_check_mark" {
+			t.Fatalf("payload not forwarded, got %v", f.payload)
+		}
+	})
+
+	t.Run("react on a non-Reactor errors", func(t *testing.T) {
+		f := &fakeSender{}
+		if _, err := HandleDoCommand(ctx, f, map[string]interface{}{"command": "react"}); err == nil {
+			t.Fatal("expected an error when backend does not support react")
 		}
 	})
 }

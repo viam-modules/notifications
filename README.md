@@ -11,6 +11,8 @@ the calling convention.
 All models share one contract (see [`notify/notify.go`](notify/notify.go)):
 
 - `DoCommand` accepts an optional `"command"` key (defaults to `"send"`).
+  `"react"` adds an emoji reaction to a previously-sent message on backends that
+  support it.
 - The remaining keys are the message payload, interpreted by each backend.
 - On success a non-nil result map is returned (at minimum `{"ok": true}`).
 
@@ -118,6 +120,31 @@ On success the command returns:
 (`ts` and `channel` are populated for the bot token path; the webhook path
 returns just `{ "ok": true }`.)
 
+#### Adding a reaction (`command: "react"`)
+
+Add an emoji reaction to an existing message with `{"command": "react", ...}`.
+This requires a **bot token** (the webhook path cannot react). The message is
+identified by the same keys `send` returns (`ts` and `channel`), so you can hand
+the `send` result straight back with a `name` added.
+
+| Key       | Type   | Description                                                                 |
+|-----------|--------|-----------------------------------------------------------------------------|
+| `name`     | string | Emoji name **without** colons, e.g. `white_check_mark`. Required.            |
+| `ts`       | string | The target message's timestamp, as returned by `send`. Required.            |
+| `channel`  | string | Channel ID the message is in. Defaults to `default_channel_id`.              |
+
+```json
+{
+  "command": "react",
+  "channel": "C0123456789",
+  "ts": "1700000000.000200",
+  "name": "white_check_mark"
+}
+```
+
+Returns `{ "ok": true }`. An `already_reacted` response from Slack is treated as
+success, so re-issuing the same reaction is idempotent.
+
 ---
 
 ## Adding a new model
@@ -128,7 +155,9 @@ addition:
 1. Create `models/<name>/<name>.go` with a `Config`, a `New` constructor, and an
    `init()` that calls `resource.RegisterService(generic.API, Model, ...)`.
 2. Implement the `notify.Sender` interface (`Send(ctx, payload)`), and have
-   `DoCommand` delegate to `notify.HandleDoCommand`.
+   `DoCommand` delegate to `notify.HandleDoCommand`. Optionally implement
+   `notify.Reactor` (`React(ctx, payload)`) to support the `"react"` command;
+   backends that don't report `"react"` as unsupported.
 3. Register the model in [`cmd/module/main.go`](cmd/module/main.go) by adding one
    `resource.APIModel{API: generic.API, Model: <name>.Model}` line.
 
