@@ -123,20 +123,21 @@ returns just `{ "ok": true }`.)
 #### Adding a reaction (`command: "react"`)
 
 Add an emoji reaction to an existing message with `{"command": "react", ...}`.
-This requires a **bot token** (the webhook path cannot react) and the message's
-`ts` — capture it from the `send` result above.
+This requires a **bot token** (the webhook path cannot react). The message is
+identified by the same keys `send` returns (`ts` and `channel`), so you can hand
+the `send` result straight back with a `name` added.
 
-| Key         | Type   | Description                                                                 |
-|-------------|--------|-----------------------------------------------------------------------------|
-| `name`       | string | Emoji name **without** colons, e.g. `white_check_mark`. Required.            |
-| `timestamp`  | string | The target message's `ts` (as returned by `send`). Required.                 |
-| `channel`    | string | Channel ID the message is in. Defaults to `default_channel_id`.              |
+| Key       | Type   | Description                                                                 |
+|-----------|--------|-----------------------------------------------------------------------------|
+| `name`     | string | Emoji name **without** colons, e.g. `white_check_mark`. Required.            |
+| `ts`       | string | The target message's timestamp, as returned by `send`. Required.            |
+| `channel`  | string | Channel ID the message is in. Defaults to `default_channel_id`.              |
 
 ```json
 {
   "command": "react",
   "channel": "C0123456789",
-  "timestamp": "1700000000.000200",
+  "ts": "1700000000.000200",
   "name": "white_check_mark"
 }
 ```

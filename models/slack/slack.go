@@ -171,11 +171,13 @@ func (s *slack) sendBotMessage(ctx context.Context, payload map[string]interface
 	return map[string]interface{}{"ok": true, "ts": parsed.TS, "channel": parsed.Channel}, nil
 }
 
-// React adds an emoji reaction to an existing message.
+// React adds an emoji reaction to an existing message. The payload uses the
+// same message-identity keys that Send returns ("ts", "channel"), so a caller
+// can hand Send's result straight back with an added "name".
 // Recognized payload keys:
-//   - "name"      (string) emoji name without colons, e.g. "white_check_mark"
-//   - "channel"   (string) channel ID the message is in; defaults to default_channel_id
-//   - "timestamp" (string) the target message's "ts" (as returned by Send)
+//   - "name"    (string) emoji name without colons, e.g. "white_check_mark"
+//   - "ts"      (string) the target message's timestamp (as returned by Send)
+//   - "channel" (string) channel ID the message is in; defaults to default_channel_id
 //
 // Reactions require a bot token; the incoming-webhook path cannot add them.
 func (s *slack) React(ctx context.Context, payload map[string]interface{}) (map[string]interface{}, error) {
@@ -187,9 +189,9 @@ func (s *slack) React(ctx context.Context, payload map[string]interface{}) (map[
 	if name == "" {
 		return nil, errors.New(`slack: "name" is required`)
 	}
-	timestamp, _ := payload["timestamp"].(string)
-	if timestamp == "" {
-		return nil, errors.New(`slack: "timestamp" is required`)
+	ts, _ := payload["ts"].(string)
+	if ts == "" {
+		return nil, errors.New(`slack: "ts" is required`)
 	}
 	channel, _ := payload["channel"].(string)
 	if channel == "" {
@@ -201,7 +203,7 @@ func (s *slack) React(ctx context.Context, payload map[string]interface{}) (map[
 
 	raw, err := s.post(ctx, s.reactURL, map[string]interface{}{
 		"channel":   channel,
-		"timestamp": timestamp,
+		"timestamp": ts,
 		"name":      name,
 	}, map[string]string{
 		"Authorization": "Bearer " + s.cfg.BotToken,

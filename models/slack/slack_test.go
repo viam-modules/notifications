@@ -139,9 +139,9 @@ func TestReact(t *testing.T) {
 	s.reactURL = srv.URL
 
 	res, err := s.React(context.Background(), map[string]interface{}{
-		"channel":   "C42",
-		"timestamp": "123.456",
-		"name":      "white_check_mark",
+		"channel": "C42",
+		"ts":      "123.456",
+		"name":    "white_check_mark",
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -154,6 +154,32 @@ func TestReact(t *testing.T) {
 	}
 	if res["ok"] != true {
 		t.Fatalf("unexpected result: %v", res)
+	}
+}
+
+// TestReactAcceptsSendResult locks the convention that React accepts the map
+// Send returns verbatim (plus a "name"), so a caller can echo it back without
+// interpreting the message identity.
+func TestReactAcceptsSendResult(t *testing.T) {
+	var gotBody map[string]interface{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(raw, &gotBody)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer srv.Close()
+
+	s := newSlackResource(&Config{BotToken: "xoxb-1"}, testLogger())
+	s.reactURL = srv.URL
+
+	// Exactly what sendBotMessage returns, with a reaction name added.
+	sendResult := map[string]interface{}{"ok": true, "ts": "123.456", "channel": "C42"}
+	sendResult["name"] = "white_check_mark"
+	if _, err := s.React(context.Background(), sendResult); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotBody["channel"] != "C42" || gotBody["timestamp"] != "123.456" {
+		t.Fatalf("send result not honored: %v", gotBody)
 	}
 }
 
@@ -170,7 +196,7 @@ func TestReactUsesDefaultChannel(t *testing.T) {
 	s.reactURL = srv.URL
 
 	if _, err := s.React(context.Background(), map[string]interface{}{
-		"timestamp": "1.2", "name": "x",
+		"ts": "1.2", "name": "x",
 	}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -188,7 +214,7 @@ func TestReactAlreadyReactedIsOK(t *testing.T) {
 	s := newSlackResource(&Config{BotToken: "xoxb-1", DefaultChannelID: "C1"}, testLogger())
 	s.reactURL = srv.URL
 
-	res, err := s.React(context.Background(), map[string]interface{}{"timestamp": "1.2", "name": "x"})
+	res, err := s.React(context.Background(), map[string]interface{}{"ts": "1.2", "name": "x"})
 	if err != nil {
 		t.Fatalf("already_reacted should be treated as success, got %v", err)
 	}
@@ -206,7 +232,7 @@ func TestReactSlackError(t *testing.T) {
 	s := newSlackResource(&Config{BotToken: "xoxb-1", DefaultChannelID: "C1"}, testLogger())
 	s.reactURL = srv.URL
 
-	if _, err := s.React(context.Background(), map[string]interface{}{"timestamp": "1.2", "name": "x"}); err == nil {
+	if _, err := s.React(context.Background(), map[string]interface{}{"ts": "1.2", "name": "x"}); err == nil {
 		t.Fatal("expected error when Slack returns a real error")
 	}
 }
@@ -214,17 +240,17 @@ func TestReactSlackError(t *testing.T) {
 func TestReactRequiresFields(t *testing.T) {
 	s := newSlackResource(&Config{BotToken: "xoxb-1", DefaultChannelID: "C1"}, testLogger())
 	s.reactURL = "http://unused.invalid"
-	if _, err := s.React(context.Background(), map[string]interface{}{"timestamp": "1.2"}); err == nil {
+	if _, err := s.React(context.Background(), map[string]interface{}{"ts": "1.2"}); err == nil {
 		t.Fatal("expected error when name is missing")
 	}
 	if _, err := s.React(context.Background(), map[string]interface{}{"name": "x"}); err == nil {
-		t.Fatal("expected error when timestamp is missing")
+		t.Fatal("expected error when ts is missing")
 	}
 }
 
 func TestReactRequiresBotToken(t *testing.T) {
 	s := newSlackResource(&Config{WebhookURL: "https://h"}, testLogger())
-	if _, err := s.React(context.Background(), map[string]interface{}{"timestamp": "1.2", "name": "x"}); err == nil {
+	if _, err := s.React(context.Background(), map[string]interface{}{"ts": "1.2", "name": "x"}); err == nil {
 		t.Fatal("expected error: webhook notifiers cannot react")
 	}
 }

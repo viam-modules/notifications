@@ -19,11 +19,13 @@ type Sender interface {
 	Send(ctx context.Context, payload map[string]interface{}) (map[string]interface{}, error)
 }
 
-// Reactor adds an emoji reaction to a message a backend previously sent
-// identified by the free-form payload. Backends that support reactions implement
-// it; those that don't simply omit it and the "react" command reports the backend
-// as unsupported. For example, slack reads "channel", "timestamp" and "name" (the
-// emoji name).
+// Reactor adds an emoji reaction to a message a backend previously sent,
+// identified by the free-form payload. The convention is that React accepts the
+// same message-identity keys Send returns, so a caller can hand Send's result
+// back with an added reaction name without interpreting it. Backends that
+// support reactions implement it; those that don't simply omit it and the
+// "react" command reports the backend as unsupported. For example, slack reads
+// "ts" and "channel" (as returned by Send) plus "name" (the emoji name).
 type Reactor interface {
 	React(ctx context.Context, payload map[string]interface{}) (map[string]interface{}, error)
 }
