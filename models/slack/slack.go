@@ -171,7 +171,7 @@ func (s *slack) sendBotMessage(ctx context.Context, payload map[string]interface
 	return map[string]interface{}{"ok": true, "ts": parsed.TS, "channel": parsed.Channel}, nil
 }
 
-// React adds an emoji reaction to an existing message via reactions.add.
+// React adds an emoji reaction to an existing message.
 // Recognized payload keys:
 //   - "name"      (string) emoji name without colons, e.g. "white_check_mark"
 //   - "channel"   (string) channel ID the message is in; defaults to default_channel_id
