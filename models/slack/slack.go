@@ -22,7 +22,10 @@ import (
 // Model is the Viam model triplet for the Slack notifier.
 var Model = resource.NewModel("viam", "notifications", "slack")
 
-const postMessageURL = "https://slack.com/api/chat.postMessage"
+const (
+	postMessageURL  = "https://slack.com/api/chat.postMessage"
+	reactionsAddURL = "https://slack.com/api/reactions.add"
+)
 
 func init() {
 	resource.RegisterService(generic.API, Model, resource.Registration[resource.Resource, *Config]{
@@ -68,6 +71,9 @@ type slack struct {
 	// postURL is the chat.postMessage endpoint. It is a field (rather than the
 	// package const directly) so tests can point it at a mock server.
 	postURL string
+	// reactURL is the reactions.add endpoint, a field for the same reason as
+	// postURL.
+	reactURL string
 }
 
 func newSlack(_ context.Context, _ resource.Dependencies, rawConf resource.Config, logger logging.Logger) (resource.Resource, error) {
@@ -88,10 +94,11 @@ func New(cfg *Config, logger logging.Logger) notify.Sender {
 
 func newSlackResource(cfg *Config, logger logging.Logger) *slack {
 	return &slack{
-		logger:  logger,
-		cfg:     cfg,
-		client:  &http.Client{Timeout: 15 * time.Second},
-		postURL: postMessageURL,
+		logger:   logger,
+		cfg:      cfg,
+		client:   &http.Client{Timeout: 15 * time.Second},
+		postURL:  postMessageURL,
+		reactURL: reactionsAddURL,
 	}
 }
 
@@ -162,6 +169,61 @@ func (s *slack) sendBotMessage(ctx context.Context, payload map[string]interface
 		return nil, fmt.Errorf("slack: chat.postMessage failed: %s", parsed.Error)
 	}
 	return map[string]interface{}{"ok": true, "ts": parsed.TS, "channel": parsed.Channel}, nil
+}
+
+// React adds an emoji reaction to an existing message via reactions.add.
+// Recognized payload keys:
+//   - "name"      (string) emoji name without colons, e.g. "white_check_mark"
+//   - "channel"   (string) channel ID the message is in; defaults to default_channel_id
+//   - "timestamp" (string) the target message's "ts" (as returned by Send)
+//
+// Reactions require a bot token; the incoming-webhook path cannot add them.
+func (s *slack) React(ctx context.Context, payload map[string]interface{}) (map[string]interface{}, error) {
+	if s.cfg.BotToken == "" {
+		return nil, errors.New("slack: reactions require a bot token (webhook notifiers cannot react)")
+	}
+
+	name, _ := payload["name"].(string)
+	if name == "" {
+		return nil, errors.New(`slack: "name" is required`)
+	}
+	timestamp, _ := payload["timestamp"].(string)
+	if timestamp == "" {
+		return nil, errors.New(`slack: "timestamp" is required`)
+	}
+	channel, _ := payload["channel"].(string)
+	if channel == "" {
+		channel = s.cfg.DefaultChannelID
+	}
+	if channel == "" {
+		return nil, errors.New(`slack: "channel" is required (no default_channel_id configured)`)
+	}
+
+	raw, err := s.post(ctx, s.reactURL, map[string]interface{}{
+		"channel":   channel,
+		"timestamp": timestamp,
+		"name":      name,
+	}, map[string]string{
+		"Authorization": "Bearer " + s.cfg.BotToken,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	// reactions.add returns HTTP 200 even on logical failures, with ok=false.
+	var parsed struct {
+		OK    bool   `json:"ok"`
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		return nil, fmt.Errorf("slack: decoding response: %w", err)
+	}
+	// "already_reacted" means the reaction is already present, which is the
+	// desired end state — treat it as success so repeat resolutions are idempotent.
+	if !parsed.OK && parsed.Error != "already_reacted" {
+		return nil, fmt.Errorf("slack: reactions.add failed: %s", parsed.Error)
+	}
+	return map[string]interface{}{"ok": true}, nil
 }
 
 func (s *slack) sendWebhook(ctx context.Context, text string, blocks interface{}) (map[string]interface{}, error) {
