@@ -2,7 +2,7 @@ module notifications
 
 go 1.25.10
 
-require go.viam.com/rdk v1.2.0
+require go.viam.com/rdk v1.4.0
 
 require (
 	cel.dev/expr v0.25.2 // indirect
