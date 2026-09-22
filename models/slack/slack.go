@@ -77,8 +77,7 @@ type slack struct {
 	// reactURL is the reactions.add endpoint, a field for the same reason as
 	// postURL.
 	reactURL string
-	// repliesURL is the conversations.replies endpoint, a field for the same
-	// reason as postURL.
+	// repliesURL is the conversations.replies endpoint, a field like postURL.
 	repliesURL string
 }
 
@@ -235,18 +234,14 @@ func (s *slack) React(ctx context.Context, payload map[string]interface{}) (map[
 	return map[string]interface{}{"ok": true}, nil
 }
 
-// Poll returns replies in a thread, newest-first cursor semantics. Recognized
-// payload keys:
+// Poll returns replies in a thread. Recognized payload keys:
 //   - "thread_ts"  (string) required; the thread to read, as returned by Send
 //   - "channel_id" (string) channel the thread is in; defaults to default_channel_id
 //   - "since_ts"       (string) cursor; only messages strictly newer are returned
 //   - "include_images" (bool)   relay image attachments as data URIs
 //
-// Returns {"messages": [{"ts", "text", "user"}]}, oldest first. With
-// "include_images" each message also carries "images" (data URIs) and, for any
-// attachment that could not be fetched, "image_errors".
-//
-// Reading requires a bot token; the incoming-webhook path cannot poll.
+// Returns {"messages": [{"ts", "text", "user"}]}, oldest first; with
+// "include_images", also "images" and "image_errors". Requires a bot token.
 func (s *slack) Poll(ctx context.Context, payload map[string]interface{}) (map[string]interface{}, error) {
 	if s.cfg.BotToken == "" {
 		return nil, errors.New("slack: polling requires a bot token (webhook notifiers cannot read)")
@@ -271,8 +266,7 @@ func (s *slack) Poll(ctx context.Context, payload map[string]interface{}) (map[s
 		"ts":      threadTS,
 		"limit":   conversationsRepliesMax,
 	}
-	// Asking Slack to skip what the caller already has keeps a long thread from
-	// re-transferring its whole history on every poll.
+	// Skip what the caller has, so a long thread is not re-sent every poll.
 	if sinceTS != "" {
 		query["oldest"] = sinceTS
 	}
@@ -308,13 +302,11 @@ func (s *slack) Poll(ctx context.Context, payload map[string]interface{}) (map[s
 
 	messages := []interface{}{}
 	for _, m := range parsed.Messages {
-		// Everything this service posts is posted by the bot, so a caller's own
-		// messages come back here; relaying them would double what it sent.
+		// We post as the bot, so a caller's own sends come back here.
 		if m.BotID != "" || m.TS == threadTS {
 			continue
 		}
-		// Slack treats "oldest" as inclusive, so the cursor message itself can
-		// come back.
+		// "oldest" is inclusive, so the cursor message itself comes back.
 		if sinceTS != "" && !tsAfter(m.TS, sinceTS) {
 			continue
 		}
@@ -322,8 +314,7 @@ func (s *slack) Poll(ctx context.Context, payload map[string]interface{}) (map[s
 		if includeImages {
 			images, imageErrors := s.relayImages(ctx, m.Files)
 			msg["images"] = images
-			// An attachment that cannot be fetched must not drop the message it
-			// came with, but it must not vanish silently either.
+			// A failed attachment must not drop its message, nor vanish.
 			if len(imageErrors) > 0 {
 				msg["image_errors"] = imageErrors
 			}
@@ -333,8 +324,7 @@ func (s *slack) Poll(ctx context.Context, payload map[string]interface{}) (map[s
 	return map[string]interface{}{"ok": true, "messages": messages}, nil
 }
 
-// relayImages downloads a message's image attachments as data URIs, returning
-// the reason for any it could not fetch.
+// relayImages downloads image attachments, reporting any it could not fetch.
 func (s *slack) relayImages(ctx context.Context, files []struct {
 	Mimetype   string `json:"mimetype"`
 	URLPrivate string `json:"url_private"`
@@ -356,11 +346,8 @@ func (s *slack) relayImages(ctx context.Context, files []struct {
 }
 
 // tsAfter reports whether Slack timestamp a is strictly newer than b.
-//
-// Slack timestamps are "<seconds>.<counter>" strings. Parsing them as a float
-// loses the counter's low digits, so two messages in the same second compare
-// equal; they are compared as text instead, where a longer seconds part is
-// later and lexicographic order is otherwise chronological.
+// Compared as text: as floats they lose the counter and same-second
+// messages compare equal.
 func tsAfter(a, b string) bool {
 	aSec, aRest, _ := strings.Cut(a, ".")
 	bSec, bRest, _ := strings.Cut(b, ".")

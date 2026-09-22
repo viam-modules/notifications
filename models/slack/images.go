@@ -17,20 +17,15 @@ import (
 )
 
 const (
-	// Attachments are re-encoded to bound what a caller receives: a pasted
-	// screenshot is routinely several megabytes, and a caller on a machine is
-	// often on a constrained link with limited memory. 1280px/JPEG80 is
-	// indistinguishable on screen at a fraction of the size.
+	// Bounds what a caller receives: a pasted screenshot is routinely several
+	// megabytes, and 1280px/JPEG80 looks the same at a fraction of the size.
 	maxImageDimension = 1280
 	jpegQuality       = 80
 	maxDownloadBytes  = 25 << 20
 )
 
-// fetchImage downloads a Slack-hosted file and returns it as a data URI.
-//
-// url_private requires the bot token in an Authorization header, which is why a
-// browser cannot fetch these itself: the request is cross-origin and the token
-// must not reach a client.
+// fetchImage downloads a Slack-hosted file as a data URI. url_private needs the
+// bot token in a header, which is why a browser cannot fetch it itself.
 func (s *slack) fetchImage(ctx context.Context, urlPrivate string) (string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, urlPrivate, nil)
 	if err != nil {
@@ -58,9 +53,8 @@ func (s *slack) fetchImage(ctx context.Context, urlPrivate string) (string, erro
 	return "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(shrunk), nil
 }
 
-// shrinkToJPEG bounds an image's longest edge to maxImageDimension and
-// re-encodes it as JPEG. It re-encodes even when no resize is needed, so a
-// caller gets one predictable format and a known size ceiling.
+// shrinkToJPEG bounds the longest edge to maxImageDimension and re-encodes as
+// JPEG, always, so a caller gets one format and a known size ceiling.
 func shrinkToJPEG(raw []byte) ([]byte, error) {
 	src, _, err := image.Decode(bytes.NewReader(raw))
 	if err != nil {

@@ -30,13 +30,11 @@ type Reactor interface {
 	React(ctx context.Context, payload map[string]interface{}) (map[string]interface{}, error)
 }
 
-// Reader fetches messages that have accumulated at a backend's destination, so
-// a caller can follow a conversation rather than only broadcast into it. The
-// convention is that Poll accepts the same message-identity keys Send returns,
-// plus a cursor, and returns a "messages" list. Backends that can read
-// implement it; those that cannot simply omit it and the "poll" command reports
-// the backend as unsupported. For example, slack reads "thread_ts" and
-// "channel_id" plus "since_ts".
+// Reader reads messages back from a backend's destination, so a caller can
+// follow a conversation rather than only broadcast into it. Optional in the
+// same way Reactor is: backends that omit it report "poll" as unsupported.
+// Poll takes the message-identity keys Send returns plus a cursor, and returns
+// a "messages" list. For example, slack reads "thread_ts" and "since_ts".
 type Reader interface {
 	Poll(ctx context.Context, payload map[string]interface{}) (map[string]interface{}, error)
 }
