@@ -30,11 +30,23 @@ type Reactor interface {
 	React(ctx context.Context, payload map[string]interface{}) (map[string]interface{}, error)
 }
 
+// Reader fetches messages that have accumulated at a backend's destination, so
+// a caller can follow a conversation rather than only broadcast into it. The
+// convention is that Poll accepts the same message-identity keys Send returns,
+// plus a cursor, and returns a "messages" list. Backends that can read
+// implement it; those that cannot simply omit it and the "poll" command reports
+// the backend as unsupported. For example, slack reads "thread_ts" and
+// "channel_id" plus "since_ts".
+type Reader interface {
+	Poll(ctx context.Context, payload map[string]interface{}) (map[string]interface{}, error)
+}
+
 // HandleDoCommand routes a generic service DoCommand to a Sender.
 //
 // The optional "command" key selects the operation. "send" (also the default
 // when omitted) delivers a notification; "react" adds an emoji reaction and
-// requires the backend to implement Reactor.
+// requires the backend to implement Reactor; "poll" reads messages back and
+// requires the backend to implement Reader.
 func HandleDoCommand(ctx context.Context, s Sender, cmd map[string]interface{}) (map[string]interface{}, error) {
 	command, _ := cmd["command"].(string)
 	switch command {
@@ -46,6 +58,12 @@ func HandleDoCommand(ctx context.Context, s Sender, cmd map[string]interface{}) 
 			return nil, fmt.Errorf("notifications: %q is not supported by this backend", command)
 		}
 		return r.React(ctx, cmd)
+	case "poll":
+		r, ok := s.(Reader)
+		if !ok {
+			return nil, fmt.Errorf("notifications: %q is not supported by this backend", command)
+		}
+		return r.Poll(ctx, cmd)
 	default:
 		return nil, fmt.Errorf("notifications: unknown command %q", command)
 	}

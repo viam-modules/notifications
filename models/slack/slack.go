@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"go.viam.com/rdk/logging"
@@ -23,8 +24,10 @@ import (
 var Model = resource.NewModel("viam", "notifications", "slack")
 
 const (
-	postMessageURL  = "https://slack.com/api/chat.postMessage"
-	reactionsAddURL = "https://slack.com/api/reactions.add"
+	postMessageURL          = "https://slack.com/api/chat.postMessage"
+	reactionsAddURL         = "https://slack.com/api/reactions.add"
+	conversationsReplyURL   = "https://slack.com/api/conversations.replies"
+	conversationsRepliesMax = "200"
 )
 
 func init() {
@@ -74,6 +77,9 @@ type slack struct {
 	// reactURL is the reactions.add endpoint, a field for the same reason as
 	// postURL.
 	reactURL string
+	// repliesURL is the conversations.replies endpoint, a field for the same
+	// reason as postURL.
+	repliesURL string
 }
 
 func newSlack(_ context.Context, _ resource.Dependencies, rawConf resource.Config, logger logging.Logger) (resource.Resource, error) {
@@ -94,11 +100,12 @@ func New(cfg *Config, logger logging.Logger) notify.Sender {
 
 func newSlackResource(cfg *Config, logger logging.Logger) *slack {
 	return &slack{
-		logger:   logger,
-		cfg:      cfg,
-		client:   &http.Client{Timeout: 15 * time.Second},
-		postURL:  postMessageURL,
-		reactURL: reactionsAddURL,
+		logger:     logger,
+		cfg:        cfg,
+		client:     &http.Client{Timeout: 15 * time.Second},
+		postURL:    postMessageURL,
+		reactURL:   reactionsAddURL,
+		repliesURL: conversationsReplyURL,
 	}
 }
 
@@ -228,6 +235,106 @@ func (s *slack) React(ctx context.Context, payload map[string]interface{}) (map[
 	return map[string]interface{}{"ok": true}, nil
 }
 
+// Poll returns replies in a thread, newest-first cursor semantics. Recognized
+// payload keys:
+//   - "thread_ts"  (string) required; the thread to read, as returned by Send
+//   - "channel_id" (string) channel the thread is in; defaults to default_channel_id
+//   - "since_ts"   (string) cursor; only messages strictly newer are returned
+//
+// Returns {"messages": [{"ts", "text", "user"}]}, oldest first.
+//
+// Reading requires a bot token; the incoming-webhook path cannot poll.
+func (s *slack) Poll(ctx context.Context, payload map[string]interface{}) (map[string]interface{}, error) {
+	if s.cfg.BotToken == "" {
+		return nil, errors.New("slack: polling requires a bot token (webhook notifiers cannot read)")
+	}
+
+	threadTS, _ := payload["thread_ts"].(string)
+	if threadTS == "" {
+		return nil, errors.New(`slack: "thread_ts" is required`)
+	}
+	channelID, _ := payload["channel_id"].(string)
+	if channelID == "" {
+		channelID = s.cfg.DefaultChannelID
+	}
+	if channelID == "" {
+		return nil, errors.New(`slack: "channel_id" is required (no default_channel_id configured)`)
+	}
+	sinceTS, _ := payload["since_ts"].(string)
+
+	query := map[string]string{
+		"channel": channelID,
+		"ts":      threadTS,
+		"limit":   conversationsRepliesMax,
+	}
+	// Asking Slack to skip what the caller already has keeps a long thread from
+	// re-transferring its whole history on every poll.
+	if sinceTS != "" {
+		query["oldest"] = sinceTS
+	}
+
+	raw, err := s.get(ctx, s.repliesURL, query, map[string]string{
+		"Authorization": "Bearer " + s.cfg.BotToken,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	// conversations.replies returns HTTP 200 even on logical failures, with ok=false.
+	var parsed struct {
+		OK       bool   `json:"ok"`
+		Error    string `json:"error"`
+		Messages []struct {
+			TS    string `json:"ts"`
+			Text  string `json:"text"`
+			User  string `json:"user"`
+			BotID string `json:"bot_id"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		return nil, fmt.Errorf("slack: decoding response: %w", err)
+	}
+	if !parsed.OK {
+		return nil, fmt.Errorf("slack: conversations.replies failed: %s", parsed.Error)
+	}
+
+	messages := []interface{}{}
+	for _, m := range parsed.Messages {
+		// Everything this service posts is posted by the bot, so a caller's own
+		// messages come back here; relaying them would double what it sent.
+		if m.BotID != "" || m.TS == threadTS {
+			continue
+		}
+		// Slack treats "oldest" as inclusive, so the cursor message itself can
+		// come back.
+		if sinceTS != "" && !tsAfter(m.TS, sinceTS) {
+			continue
+		}
+		messages = append(messages, map[string]interface{}{
+			"ts": m.TS, "text": m.Text, "user": m.User,
+		})
+	}
+	return map[string]interface{}{"ok": true, "messages": messages}, nil
+}
+
+// tsAfter reports whether Slack timestamp a is strictly newer than b.
+//
+// Slack timestamps are "<seconds>.<counter>" strings. Parsing them as a float
+// loses the counter's low digits, so two messages in the same second compare
+// equal; they are compared as text instead, where a longer seconds part is
+// later and lexicographic order is otherwise chronological.
+func tsAfter(a, b string) bool {
+	aSec, aRest, _ := strings.Cut(a, ".")
+	bSec, bRest, _ := strings.Cut(b, ".")
+	if len(aSec) != len(bSec) {
+		return len(aSec) > len(bSec)
+	}
+	if aSec != bSec {
+		return aSec > bSec
+	}
+	return aRest > bRest
+}
+
 func (s *slack) sendWebhook(ctx context.Context, text string, blocks interface{}) (map[string]interface{}, error) {
 	body := map[string]interface{}{}
 	if text != "" {
@@ -252,6 +359,36 @@ func (s *slack) post(ctx context.Context, url string, body map[string]interface{
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json; charset=utf-8")
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("slack: request failed: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("slack: reading response: %w", err)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("slack: http %d: %s", resp.StatusCode, string(data))
+	}
+	return data, nil
+}
+
+func (s *slack) get(ctx context.Context, endpoint string, query, headers map[string]string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	q := req.URL.Query()
+	for k, v := range query {
+		q.Set(k, v)
+	}
+	req.URL.RawQuery = q.Encode()
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}

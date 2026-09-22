@@ -11,14 +11,14 @@ the calling convention.
 All models share one contract (see [`notify/notify.go`](notify/notify.go)):
 
 - `DoCommand` accepts an optional `"command"` key (defaults to `"send"`).
-  `"react"` adds an emoji reaction to a previously-sent message on backends that
-  support it.
+  `"react"` adds an emoji reaction to a previously-sent message, and `"poll"`
+  reads messages back, on backends that support them.
 - The remaining keys are the message payload, interpreted by each backend.
 - On success a non-nil result map is returned (at minimum `{"ok": true}`).
 
 ```
 cmd/module/main.go        module entrypoint — registers every model
-notify/notify.go          shared Sender interface + DoCommand dispatcher
+notify/notify.go          shared Sender/Reactor/Reader interfaces + DoCommand dispatcher
 models/slack/slack.go     viam:notifications:slack
 models/<name>/<name>.go   future backends (email, sms, ...)
 ```
@@ -145,6 +145,45 @@ the `send` result straight back with a `name` added.
 Returns `{ "ok": true }`. An `already_reacted` response from Slack is treated as
 success, so re-issuing the same reaction is idempotent.
 
+#### Reading a thread (`command: "poll"`)
+
+Read replies in a thread with `{"command": "poll", ...}`, so a caller can follow
+a conversation instead of only broadcasting into it. This requires a **bot
+token** (the webhook path cannot read) and the `channels:history` scope
+(`groups:history` for a private channel).
+
+| Key          | Type   | Description                                                                 |
+|--------------|--------|-----------------------------------------------------------------------------|
+| `thread_ts`  | string | The thread to read, as returned by `send`. Required.                        |
+| `channel_id` | string | Channel the thread is in. Defaults to `default_channel_id`.                 |
+| `since_ts`   | string | Cursor. Only messages strictly newer than this are returned.                |
+
+```json
+{
+  "command": "poll",
+  "thread_ts": "1700000000.000100",
+  "since_ts": "1700000000.000200"
+}
+```
+
+Returns the replies oldest-first:
+
+```json
+{
+  "ok": true,
+  "messages": [
+    { "ts": "1700000000.000300", "text": "on it", "user": "U0123456789" }
+  ]
+}
+```
+
+Two behaviours worth knowing. **The caller's own messages are not returned** —
+everything this service posts is posted by the bot, so echoing them back would
+double what the caller already has; keep your own sends locally and merge by
+`ts`. And **`since_ts` is a cursor, not a filter on your side**: pass back the
+newest `ts` you have seen and Slack is asked to skip the rest, so a long thread
+does not re-transfer its history on every poll.
+
 ---
 
 ## Adding a new model
@@ -156,8 +195,9 @@ addition:
    `init()` that calls `resource.RegisterService(generic.API, Model, ...)`.
 2. Implement the `notify.Sender` interface (`Send(ctx, payload)`), and have
    `DoCommand` delegate to `notify.HandleDoCommand`. Optionally implement
-   `notify.Reactor` (`React(ctx, payload)`) to support the `"react"` command;
-   backends that don't report `"react"` as unsupported.
+   `notify.Reactor` (`React(ctx, payload)`) to support the `"react"` command and
+   `notify.Reader` (`Poll(ctx, payload)`) to support `"poll"`; backends that
+   don't report those commands as unsupported.
 3. Register the model in [`cmd/module/main.go`](cmd/module/main.go) by adding one
    `resource.APIModel{API: generic.API, Model: <name>.Model}` line.
 

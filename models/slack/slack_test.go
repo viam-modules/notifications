@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"go.viam.com/rdk/logging"
@@ -275,5 +276,133 @@ func TestSendWebhook(t *testing.T) {
 	}
 	if res["ok"] != true {
 		t.Fatalf("expected ok=true, got %v", res)
+	}
+}
+
+func TestPollRequiresBotToken(t *testing.T) {
+	s := newSlackResource(&Config{WebhookURL: "https://hooks.example"}, testLogger())
+	if _, err := s.Poll(context.Background(), map[string]interface{}{"thread_ts": "111.000"}); err == nil {
+		t.Fatal("expected an error: a webhook cannot read a thread")
+	}
+}
+
+func TestPollRequiresThreadTS(t *testing.T) {
+	s := newSlackResource(&Config{BotToken: "xoxb-1", DefaultChannelID: "C0A"}, testLogger())
+	s.repliesURL = "http://unused.invalid"
+	if _, err := s.Poll(context.Background(), map[string]interface{}{}); err == nil {
+		t.Fatal("expected an error when thread_ts is missing")
+	}
+}
+
+func TestPollRequiresChannel(t *testing.T) {
+	s := newSlackResource(&Config{BotToken: "xoxb-1"}, testLogger())
+	s.repliesURL = "http://unused.invalid"
+	_, err := s.Poll(context.Background(), map[string]interface{}{"thread_ts": "111.000"})
+	if err == nil {
+		t.Fatal("expected an error with no channel_id and no default_channel_id")
+	}
+}
+
+func TestPollDropsRootAndBotEcho(t *testing.T) {
+	var gotQuery string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = r.URL.RawQuery
+		if got := r.Header.Get("Authorization"); got != "Bearer xoxb-secret" {
+			t.Errorf("missing bot token, got %q", got)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "messages": []interface{}{
+			map[string]interface{}{"ts": "111.000", "text": "root", "bot_id": "B1"},
+			map[string]interface{}{"ts": "112.000", "text": "our own send", "bot_id": "B1"},
+			map[string]interface{}{"ts": "113.000", "text": "a human reply", "user": "U9"},
+		}})
+	}))
+	defer srv.Close()
+
+	s := newSlackResource(&Config{BotToken: "xoxb-secret", DefaultChannelID: "C0A"}, testLogger())
+	s.repliesURL = srv.URL
+
+	res, err := s.Poll(context.Background(), map[string]interface{}{"thread_ts": "111.000"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	msgs, ok := res["messages"].([]interface{})
+	if !ok {
+		t.Fatalf("expected a messages list, got %v", res["messages"])
+	}
+	// The root and anything the bot posted are the caller's own words coming
+	// back; only the human reply is new information.
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 message, got %d: %v", len(msgs), msgs)
+	}
+	if got := msgs[0].(map[string]interface{})["text"]; got != "a human reply" {
+		t.Fatalf("unexpected message %v", got)
+	}
+	if !strings.Contains(gotQuery, "ts=111.000") || !strings.Contains(gotQuery, "channel=C0A") {
+		t.Errorf("thread and channel should reach Slack as query params, got %q", gotQuery)
+	}
+}
+
+func TestPollForwardsCursorAndReChecksBoundary(t *testing.T) {
+	var gotQuery string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = r.URL.RawQuery
+		// Slack treats "oldest" as inclusive, so it hands back the very message
+		// the caller already has.
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "messages": []interface{}{
+			map[string]interface{}{"ts": "113.000", "text": "already seen", "user": "U9"},
+			map[string]interface{}{"ts": "114.000", "text": "new", "user": "U9"},
+		}})
+	}))
+	defer srv.Close()
+
+	s := newSlackResource(&Config{BotToken: "xoxb-1", DefaultChannelID: "C0A"}, testLogger())
+	s.repliesURL = srv.URL
+
+	res, err := s.Poll(context.Background(), map[string]interface{}{
+		"thread_ts": "111.000", "since_ts": "113.000",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(gotQuery, "oldest=113.000") {
+		t.Errorf("cursor should reach Slack as oldest, got %q", gotQuery)
+	}
+	msgs := res["messages"].([]interface{})
+	if len(msgs) != 1 || msgs[0].(map[string]interface{})["text"] != "new" {
+		t.Fatalf("expected the boundary message filtered out, got %v", msgs)
+	}
+}
+
+func TestPollSurfacesSlackError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		// HTTP 200 with ok=false; trusting the status code would report an
+		// unreadable channel as an empty thread.
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"ok": false, "error": "not_in_channel"})
+	}))
+	defer srv.Close()
+
+	s := newSlackResource(&Config{BotToken: "xoxb-1", DefaultChannelID: "C0A"}, testLogger())
+	s.repliesURL = srv.URL
+
+	if _, err := s.Poll(context.Background(), map[string]interface{}{"thread_ts": "111.000"}); err == nil {
+		t.Fatal("expected not_in_channel to surface as an error")
+	}
+}
+
+func TestTSAfter(t *testing.T) {
+	cases := []struct {
+		a, b string
+		want bool
+	}{
+		// Parsed as float64 these lose the counter and compare equal.
+		{"1700000000.000200", "1700000000.000100", true},
+		{"1700000000.000100", "1700000000.000200", false},
+		{"1700000001.000000", "1700000000.999999", true},
+		{"1700000000.000100", "1700000000.000100", false},
+	}
+	for _, tc := range cases {
+		if got := tsAfter(tc.a, tc.b); got != tc.want {
+			t.Errorf("tsAfter(%q, %q) = %v, want %v", tc.a, tc.b, got, tc.want)
+		}
 	}
 }
