@@ -49,8 +49,7 @@ func TestShrinkToJPEGRejectsGarbage(t *testing.T) {
 }
 
 func TestPollRelaysImagesOnlyWhenAsked(t *testing.T) {
-	var files *httptest.Server
-	files = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	files := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got := r.Header.Get("Authorization"); got != "Bearer xoxb-secret" {
 			t.Errorf("attachment fetch must carry the bot token, got %q", got)
 		}
