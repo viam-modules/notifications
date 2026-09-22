@@ -117,8 +117,14 @@ On success the command returns:
 { "ok": true, "ts": "1700000000.000200", "channel": "C0123456789" }
 ```
 
-(`ts` and `channel` are populated for the bot token path; the webhook path
-returns just `{ "ok": true }`.)
+(`ts`, `thread_ts` and `channel` are populated for the bot token path; the
+webhook path returns just `{ "ok": true }`.)
+
+`ts` identifies **this message** and `thread_ts` identifies **the conversation
+it is in**. They are equal when the message opened the thread, because a Slack
+thread borrows its root message's timestamp as its id. Keep `thread_ts` to
+continue or read the conversation, and `ts` to react to that one message — a
+`send` result can be handed straight to either `react` or `poll`.
 
 #### Adding a reaction (`command: "react"`)
 
@@ -156,7 +162,7 @@ attachments.
 | Key          | Type   | Description                                                                 |
 |--------------|--------|-----------------------------------------------------------------------------|
 | `thread_ts`  | string | The thread to read, as returned by `send`. Required.                        |
-| `channel_id` | string | Channel the thread is in. Defaults to `default_channel_id`.                 |
+| `channel_id` | string | Channel the thread is in; `channel` is also accepted. Defaults to `default_channel_id`. |
 | `since_ts`   | string | Cursor. Only messages strictly newer than this are returned.                |
 | `include_images` | bool | Relay image attachments as data URIs. Off by default; needs `files:read`. |
 
@@ -167,6 +173,9 @@ attachments.
   "since_ts": "1700000000.000200"
 }
 ```
+
+Since `send` returns both `thread_ts` and `channel`, its result is already a
+valid `poll` payload — add `since_ts` as you go.
 
 Returns the replies oldest-first:
 

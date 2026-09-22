@@ -114,7 +114,9 @@ func (s *slack) DoCommand(ctx context.Context, cmd map[string]interface{}) (map[
 	return notify.HandleDoCommand(ctx, s, cmd)
 }
 
-// Send posts a message to Slack. Recognized payload keys:
+// Send posts a message to Slack. Returns "ts" (this message) and "thread_ts"
+// (the conversation it is in), which are equal when the message opened the
+// thread. Recognized payload keys:
 //   - "channel_id" (string) Slack channel ID; defaults to default_channel_id (bot token only)
 //   - "text"       (string) message text
 //   - "blocks"     (array)  Slack Block Kit blocks, passed through as-is
@@ -174,7 +176,16 @@ func (s *slack) sendBotMessage(ctx context.Context, payload map[string]interface
 	if !parsed.OK {
 		return nil, fmt.Errorf("slack: chat.postMessage failed: %s", parsed.Error)
 	}
-	return map[string]interface{}{"ok": true, "ts": parsed.TS, "channel": parsed.Channel}, nil
+	// The thread this message is in: the one it was posted into, or its own ts
+	// when it opened one. Returned so a caller can hand the result to Poll
+	// without knowing which case it was.
+	threadTS, _ := payload["thread_ts"].(string)
+	if threadTS == "" {
+		threadTS = parsed.TS
+	}
+	return map[string]interface{}{
+		"ok": true, "ts": parsed.TS, "thread_ts": threadTS, "channel": parsed.Channel,
+	}, nil
 }
 
 // React adds an emoji reaction to an existing message. The payload uses the
@@ -236,7 +247,8 @@ func (s *slack) React(ctx context.Context, payload map[string]interface{}) (map[
 
 // Poll returns replies in a thread. Recognized payload keys:
 //   - "thread_ts"  (string) required; the thread to read, as returned by Send
-//   - "channel_id" (string) channel the thread is in; defaults to default_channel_id
+//   - "channel_id" (string) channel the thread is in; "channel" also accepted,
+//     defaulting to default_channel_id
 //   - "since_ts"       (string) cursor; only messages strictly newer are returned
 //   - "include_images" (bool)   relay image attachments as data URIs
 //
@@ -252,6 +264,10 @@ func (s *slack) Poll(ctx context.Context, payload map[string]interface{}) (map[s
 		return nil, errors.New(`slack: "thread_ts" is required`)
 	}
 	channelID, _ := payload["channel_id"].(string)
+	if channelID == "" {
+		// "channel" is what Send returns and React takes.
+		channelID, _ = payload["channel"].(string)
+	}
 	if channelID == "" {
 		channelID = s.cfg.DefaultChannelID
 	}

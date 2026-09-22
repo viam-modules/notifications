@@ -406,3 +406,71 @@ func TestTSAfter(t *testing.T) {
 		}
 	}
 }
+
+func TestSendReturnsTheThreadItWroteInto(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]interface{}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		ts := "111.000"
+		if _, threaded := body["thread_ts"]; threaded {
+			ts = "999.000"
+		}
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"ok": true, "ts": ts, "channel": "C0A",
+		})
+	}))
+	defer srv.Close()
+
+	s := newSlackResource(&Config{BotToken: "xoxb-1", DefaultChannelID: "C0A"}, testLogger())
+	s.postURL = srv.URL
+	ctx := context.Background()
+
+	// Opening a thread: the message's own ts is the thread id, so they match.
+	opened, err := s.Send(ctx, map[string]interface{}{"text": "help"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opened["ts"] != "111.000" || opened["thread_ts"] != "111.000" {
+		t.Fatalf("opening a thread should return ts == thread_ts, got %v", opened)
+	}
+
+	// Replying in one: ts is this message, thread_ts is the conversation.
+	replied, err := s.Send(ctx, map[string]interface{}{"text": "more", "thread_ts": "111.000"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replied["ts"] != "999.000" {
+		t.Errorf("expected the reply's own ts, got %v", replied["ts"])
+	}
+	if replied["thread_ts"] != "111.000" {
+		t.Errorf("expected the thread it was posted into, got %v", replied["thread_ts"])
+	}
+}
+
+// TestPollAcceptsSendResult locks the convention that a Send result can be
+// handed to Poll unchanged, the same way React already accepts one.
+func TestPollAcceptsSendResult(t *testing.T) {
+	var gotQuery string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = r.URL.RawQuery
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "messages": []interface{}{}})
+	}))
+	defer srv.Close()
+
+	// No default_channel_id: the channel has to come from the Send result.
+	s := newSlackResource(&Config{BotToken: "xoxb-1"}, testLogger())
+	s.repliesURL = srv.URL
+
+	sendResult := map[string]interface{}{
+		"ok": true, "ts": "111.000", "thread_ts": "111.000", "channel": "C0FROMSEND",
+	}
+	if _, err := s.Poll(context.Background(), sendResult); err != nil {
+		t.Fatalf("a Send result should be a valid Poll payload: %v", err)
+	}
+	if !strings.Contains(gotQuery, "channel=C0FROMSEND") {
+		t.Errorf(`Poll should accept "channel" as Send returns it, got %q`, gotQuery)
+	}
+	if !strings.Contains(gotQuery, "ts=111.000") {
+		t.Errorf("expected the thread from the Send result, got %q", gotQuery)
+	}
+}
