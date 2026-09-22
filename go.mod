@@ -2,7 +2,10 @@ module notifications
 
 go 1.25.10
 
-require go.viam.com/rdk v1.8.0
+require (
+	go.viam.com/rdk v1.8.0
+	golang.org/x/image v0.41.0
+)
 
 require (
 	cel.dev/expr v0.25.2 // indirect
@@ -190,7 +193,6 @@ require (
 	go4.org/unsafe/assume-no-moving-gc v0.0.0-20230525183740-e7c30c78aeb2 // indirect
 	golang.org/x/crypto v0.55.0 // indirect
 	golang.org/x/exp v0.0.0-20260611194520-c48552f49976 // indirect
-	golang.org/x/image v0.41.0 // indirect
 	golang.org/x/mod v0.38.0 // indirect
 	golang.org/x/net v0.58.0 // indirect
 	golang.org/x/oauth2 v0.36.0 // indirect

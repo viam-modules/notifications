@@ -150,13 +150,15 @@ success, so re-issuing the same reaction is idempotent.
 Read replies in a thread with `{"command": "poll", ...}`, so a caller can follow
 a conversation instead of only broadcasting into it. This requires a **bot
 token** (the webhook path cannot read) and the `channels:history` scope
-(`groups:history` for a private channel).
+(`groups:history` for a private channel), plus `files:read` to relay
+attachments.
 
 | Key          | Type   | Description                                                                 |
 |--------------|--------|-----------------------------------------------------------------------------|
 | `thread_ts`  | string | The thread to read, as returned by `send`. Required.                        |
 | `channel_id` | string | Channel the thread is in. Defaults to `default_channel_id`.                 |
 | `since_ts`   | string | Cursor. Only messages strictly newer than this are returned.                |
+| `include_images` | bool | Relay image attachments as data URIs. Off by default; needs `files:read`. |
 
 ```json
 {
@@ -176,6 +178,14 @@ Returns the replies oldest-first:
   ]
 }
 ```
+
+With `include_images`, each message also carries an `images` list of JPEG data
+URIs, plus `image_errors` naming any attachment that could not be fetched — an
+unreachable attachment never drops the message it came with. Slack serves
+attachments from `url_private`, which needs the bot token in a header, so a
+browser cannot fetch them itself; images are downscaled to 1280px and re-encoded
+as JPEG so a caller on a constrained link is not handed a multi-megabyte
+screenshot.
 
 Two behaviours worth knowing. **The caller's own messages are not returned** —
 everything this service posts is posted by the bot, so echoing them back would

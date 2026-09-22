@@ -239,9 +239,12 @@ func (s *slack) React(ctx context.Context, payload map[string]interface{}) (map[
 // payload keys:
 //   - "thread_ts"  (string) required; the thread to read, as returned by Send
 //   - "channel_id" (string) channel the thread is in; defaults to default_channel_id
-//   - "since_ts"   (string) cursor; only messages strictly newer are returned
+//   - "since_ts"       (string) cursor; only messages strictly newer are returned
+//   - "include_images" (bool)   relay image attachments as data URIs
 //
-// Returns {"messages": [{"ts", "text", "user"}]}, oldest first.
+// Returns {"messages": [{"ts", "text", "user"}]}, oldest first. With
+// "include_images" each message also carries "images" (data URIs) and, for any
+// attachment that could not be fetched, "image_errors".
 //
 // Reading requires a bot token; the incoming-webhook path cannot poll.
 func (s *slack) Poll(ctx context.Context, payload map[string]interface{}) (map[string]interface{}, error) {
@@ -261,6 +264,7 @@ func (s *slack) Poll(ctx context.Context, payload map[string]interface{}) (map[s
 		return nil, errors.New(`slack: "channel_id" is required (no default_channel_id configured)`)
 	}
 	sinceTS, _ := payload["since_ts"].(string)
+	includeImages, _ := payload["include_images"].(bool)
 
 	query := map[string]string{
 		"channel": channelID,
@@ -289,6 +293,10 @@ func (s *slack) Poll(ctx context.Context, payload map[string]interface{}) (map[s
 			Text  string `json:"text"`
 			User  string `json:"user"`
 			BotID string `json:"bot_id"`
+			Files []struct {
+				Mimetype   string `json:"mimetype"`
+				URLPrivate string `json:"url_private"`
+			} `json:"files"`
 		} `json:"messages"`
 	}
 	if err := json.Unmarshal(raw, &parsed); err != nil {
@@ -310,11 +318,41 @@ func (s *slack) Poll(ctx context.Context, payload map[string]interface{}) (map[s
 		if sinceTS != "" && !tsAfter(m.TS, sinceTS) {
 			continue
 		}
-		messages = append(messages, map[string]interface{}{
-			"ts": m.TS, "text": m.Text, "user": m.User,
-		})
+		msg := map[string]interface{}{"ts": m.TS, "text": m.Text, "user": m.User}
+		if includeImages {
+			images, imageErrors := s.relayImages(ctx, m.Files)
+			msg["images"] = images
+			// An attachment that cannot be fetched must not drop the message it
+			// came with, but it must not vanish silently either.
+			if len(imageErrors) > 0 {
+				msg["image_errors"] = imageErrors
+			}
+		}
+		messages = append(messages, msg)
 	}
 	return map[string]interface{}{"ok": true, "messages": messages}, nil
+}
+
+// relayImages downloads a message's image attachments as data URIs, returning
+// the reason for any it could not fetch.
+func (s *slack) relayImages(ctx context.Context, files []struct {
+	Mimetype   string `json:"mimetype"`
+	URLPrivate string `json:"url_private"`
+}) (images, imageErrors []interface{}) {
+	images = []interface{}{}
+	imageErrors = []interface{}{}
+	for _, f := range files {
+		if !strings.HasPrefix(f.Mimetype, "image/") {
+			continue
+		}
+		dataURI, err := s.fetchImage(ctx, f.URLPrivate)
+		if err != nil {
+			imageErrors = append(imageErrors, err.Error())
+			continue
+		}
+		images = append(images, dataURI)
+	}
+	return images, imageErrors
 }
 
 // tsAfter reports whether Slack timestamp a is strictly newer than b.
