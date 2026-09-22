@@ -11,14 +11,14 @@ the calling convention.
 All models share one contract (see [`notify/notify.go`](notify/notify.go)):
 
 - `DoCommand` accepts an optional `"command"` key (defaults to `"send"`).
-  `"react"` adds an emoji reaction to a previously-sent message on backends that
-  support it.
+  `"react"` adds an emoji reaction to a previously-sent message, and `"poll"`
+  reads messages back, on backends that support them.
 - The remaining keys are the message payload, interpreted by each backend.
 - On success a non-nil result map is returned (at minimum `{"ok": true}`).
 
 ```
 cmd/module/main.go        module entrypoint — registers every model
-notify/notify.go          shared Sender interface + DoCommand dispatcher
+notify/notify.go          shared Sender/Reactor/Reader interfaces + DoCommand dispatcher
 models/slack/slack.go     viam:notifications:slack
 models/<name>/<name>.go   future backends (email, sms, ...)
 ```
@@ -117,8 +117,14 @@ On success the command returns:
 { "ok": true, "ts": "1700000000.000200", "channel": "C0123456789" }
 ```
 
-(`ts` and `channel` are populated for the bot token path; the webhook path
-returns just `{ "ok": true }`.)
+(`ts`, `thread_ts` and `channel` are populated for the bot token path; the
+webhook path returns just `{ "ok": true }`.)
+
+`ts` identifies **this message** and `thread_ts` identifies **the conversation
+it is in**. They are equal when the message opened the thread, because a Slack
+thread borrows its root message's timestamp as its id. Keep `thread_ts` to
+continue or read the conversation, and `ts` to react to that one message — a
+`send` result can be handed straight to either `react` or `poll`.
 
 #### Adding a reaction (`command: "react"`)
 
@@ -145,6 +151,58 @@ the `send` result straight back with a `name` added.
 Returns `{ "ok": true }`. An `already_reacted` response from Slack is treated as
 success, so re-issuing the same reaction is idempotent.
 
+#### Reading a thread (`command: "poll"`)
+
+Read replies in a thread with `{"command": "poll", ...}`, so a caller can follow
+a conversation instead of only broadcasting into it. This requires a **bot
+token** (the webhook path cannot read) and the `channels:history` scope
+(`groups:history` for a private channel), plus `files:read` to relay
+attachments.
+
+| Key          | Type   | Description                                                                 |
+|--------------|--------|-----------------------------------------------------------------------------|
+| `thread_ts`  | string | The thread to read, as returned by `send`. Required.                        |
+| `channel_id` | string | Channel the thread is in; `channel` is also accepted. Defaults to `default_channel_id`. |
+| `since_ts`   | string | Cursor. Only messages strictly newer than this are returned.                |
+| `include_images` | bool | Relay image attachments as data URIs. Off by default; needs `files:read`. |
+
+```json
+{
+  "command": "poll",
+  "thread_ts": "1700000000.000100",
+  "since_ts": "1700000000.000200"
+}
+```
+
+Since `send` returns both `thread_ts` and `channel`, its result is already a
+valid `poll` payload — add `since_ts` as you go.
+
+Returns the replies oldest-first:
+
+```json
+{
+  "ok": true,
+  "messages": [
+    { "ts": "1700000000.000300", "text": "on it", "user": "U0123456789" }
+  ]
+}
+```
+
+With `include_images`, each message also carries an `images` list of JPEG data
+URIs, plus `image_errors` naming any attachment that could not be fetched — an
+unreachable attachment never drops the message it came with. Slack serves
+attachments from `url_private`, which needs the bot token in a header, so a
+browser cannot fetch them itself; images are downscaled to 1280px and re-encoded
+as JPEG so a caller on a constrained link is not handed a multi-megabyte
+screenshot.
+
+Two behaviours worth knowing. **The caller's own messages are not returned** —
+everything this service posts is posted by the bot, so echoing them back would
+double what the caller already has; keep your own sends locally and merge by
+`ts`. And **`since_ts` is a cursor, not a filter on your side**: pass back the
+newest `ts` you have seen and Slack is asked to skip the rest, so a long thread
+does not re-transfer its history on every poll.
+
 ---
 
 ## Adding a new model
@@ -156,8 +214,9 @@ addition:
    `init()` that calls `resource.RegisterService(generic.API, Model, ...)`.
 2. Implement the `notify.Sender` interface (`Send(ctx, payload)`), and have
    `DoCommand` delegate to `notify.HandleDoCommand`. Optionally implement
-   `notify.Reactor` (`React(ctx, payload)`) to support the `"react"` command;
-   backends that don't report `"react"` as unsupported.
+   `notify.Reactor` (`React(ctx, payload)`) to support the `"react"` command and
+   `notify.Reader` (`Poll(ctx, payload)`) to support `"poll"`; backends that
+   don't report those commands as unsupported.
 3. Register the model in [`cmd/module/main.go`](cmd/module/main.go) by adding one
    `resource.APIModel{API: generic.API, Model: <name>.Model}` line.
 

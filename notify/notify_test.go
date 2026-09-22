@@ -30,6 +30,19 @@ func (f *fakeReactor) React(_ context.Context, payload map[string]interface{}) (
 	return map[string]interface{}{"ok": true}, nil
 }
 
+// fakeReader implements both Sender and Reader.
+type fakeReader struct {
+	fakeSender
+	polled  bool
+	payload map[string]interface{}
+}
+
+func (f *fakeReader) Poll(_ context.Context, payload map[string]interface{}) (map[string]interface{}, error) {
+	f.polled = true
+	f.payload = payload
+	return map[string]interface{}{"ok": true, "messages": []interface{}{}}, nil
+}
+
 func TestHandleDoCommand(t *testing.T) {
 	ctx := context.Background()
 
@@ -92,6 +105,30 @@ func TestHandleDoCommand(t *testing.T) {
 		f := &fakeSender{}
 		if _, err := HandleDoCommand(ctx, f, map[string]interface{}{"command": "react"}); err == nil {
 			t.Fatal("expected an error when backend does not support react")
+		}
+	})
+
+	t.Run("poll routes to Reader", func(t *testing.T) {
+		f := &fakeReader{}
+		got, err := HandleDoCommand(ctx, f, map[string]interface{}{"command": "poll", "thread_ts": "111.000"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !f.polled {
+			t.Fatal("expected Poll to be called")
+		}
+		if got["ok"] != true {
+			t.Fatalf("expected ok=true, got %v", got)
+		}
+		if f.payload["thread_ts"] != "111.000" {
+			t.Fatalf("payload not forwarded, got %v", f.payload)
+		}
+	})
+
+	t.Run("poll on a non-Reader errors", func(t *testing.T) {
+		f := &fakeSender{}
+		if _, err := HandleDoCommand(ctx, f, map[string]interface{}{"command": "poll"}); err == nil {
+			t.Fatal("expected an error when backend does not support poll")
 		}
 	})
 }

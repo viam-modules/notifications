@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"go.viam.com/rdk/logging"
@@ -23,8 +24,10 @@ import (
 var Model = resource.NewModel("viam", "notifications", "slack")
 
 const (
-	postMessageURL  = "https://slack.com/api/chat.postMessage"
-	reactionsAddURL = "https://slack.com/api/reactions.add"
+	postMessageURL          = "https://slack.com/api/chat.postMessage"
+	reactionsAddURL         = "https://slack.com/api/reactions.add"
+	conversationsReplyURL   = "https://slack.com/api/conversations.replies"
+	conversationsRepliesMax = "200"
 )
 
 func init() {
@@ -74,6 +77,8 @@ type slack struct {
 	// reactURL is the reactions.add endpoint, a field for the same reason as
 	// postURL.
 	reactURL string
+	// repliesURL is the conversations.replies endpoint, a field like postURL.
+	repliesURL string
 }
 
 func newSlack(_ context.Context, _ resource.Dependencies, rawConf resource.Config, logger logging.Logger) (resource.Resource, error) {
@@ -94,11 +99,12 @@ func New(cfg *Config, logger logging.Logger) notify.Sender {
 
 func newSlackResource(cfg *Config, logger logging.Logger) *slack {
 	return &slack{
-		logger:   logger,
-		cfg:      cfg,
-		client:   &http.Client{Timeout: 15 * time.Second},
-		postURL:  postMessageURL,
-		reactURL: reactionsAddURL,
+		logger:     logger,
+		cfg:        cfg,
+		client:     &http.Client{Timeout: 15 * time.Second},
+		postURL:    postMessageURL,
+		reactURL:   reactionsAddURL,
+		repliesURL: conversationsReplyURL,
 	}
 }
 
@@ -108,7 +114,9 @@ func (s *slack) DoCommand(ctx context.Context, cmd map[string]interface{}) (map[
 	return notify.HandleDoCommand(ctx, s, cmd)
 }
 
-// Send posts a message to Slack. Recognized payload keys:
+// Send posts a message to Slack. Returns "ts" (this message) and "thread_ts"
+// (the conversation it is in), which are equal when the message opened the
+// thread. Recognized payload keys:
 //   - "channel_id" (string) Slack channel ID; defaults to default_channel_id (bot token only)
 //   - "text"       (string) message text
 //   - "blocks"     (array)  Slack Block Kit blocks, passed through as-is
@@ -168,7 +176,16 @@ func (s *slack) sendBotMessage(ctx context.Context, payload map[string]interface
 	if !parsed.OK {
 		return nil, fmt.Errorf("slack: chat.postMessage failed: %s", parsed.Error)
 	}
-	return map[string]interface{}{"ok": true, "ts": parsed.TS, "channel": parsed.Channel}, nil
+	// The thread this message is in: the one it was posted into, or its own ts
+	// when it opened one. Returned so a caller can hand the result to Poll
+	// without knowing which case it was.
+	threadTS, _ := payload["thread_ts"].(string)
+	if threadTS == "" {
+		threadTS = parsed.TS
+	}
+	return map[string]interface{}{
+		"ok": true, "ts": parsed.TS, "thread_ts": threadTS, "channel": parsed.Channel,
+	}, nil
 }
 
 // React adds an emoji reaction to an existing message. The payload uses the
@@ -228,6 +245,137 @@ func (s *slack) React(ctx context.Context, payload map[string]interface{}) (map[
 	return map[string]interface{}{"ok": true}, nil
 }
 
+// Poll returns replies in a thread. Recognized payload keys:
+//   - "thread_ts"  (string) required; the thread to read, as returned by Send
+//   - "channel_id" (string) channel the thread is in; "channel" also accepted,
+//     defaulting to default_channel_id
+//   - "since_ts"       (string) cursor; only messages strictly newer are returned
+//   - "include_images" (bool)   relay image attachments as data URIs
+//
+// Returns {"messages": [{"ts", "text", "user"}]}, oldest first; with
+// "include_images", also "images" and "image_errors". Requires a bot token.
+func (s *slack) Poll(ctx context.Context, payload map[string]interface{}) (map[string]interface{}, error) {
+	if s.cfg.BotToken == "" {
+		return nil, errors.New("slack: polling requires a bot token (webhook notifiers cannot read)")
+	}
+
+	threadTS, _ := payload["thread_ts"].(string)
+	if threadTS == "" {
+		return nil, errors.New(`slack: "thread_ts" is required`)
+	}
+	channelID, _ := payload["channel_id"].(string)
+	if channelID == "" {
+		// "channel" is what Send returns and React takes.
+		channelID, _ = payload["channel"].(string)
+	}
+	if channelID == "" {
+		channelID = s.cfg.DefaultChannelID
+	}
+	if channelID == "" {
+		return nil, errors.New(`slack: "channel_id" is required (no default_channel_id configured)`)
+	}
+	sinceTS, _ := payload["since_ts"].(string)
+	includeImages, _ := payload["include_images"].(bool)
+
+	query := map[string]string{
+		"channel": channelID,
+		"ts":      threadTS,
+		"limit":   conversationsRepliesMax,
+	}
+	// Skip what the caller has, so a long thread is not re-sent every poll.
+	if sinceTS != "" {
+		query["oldest"] = sinceTS
+	}
+
+	raw, err := s.get(ctx, s.repliesURL, query, map[string]string{
+		"Authorization": "Bearer " + s.cfg.BotToken,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	// conversations.replies returns HTTP 200 even on logical failures, with ok=false.
+	var parsed struct {
+		OK       bool   `json:"ok"`
+		Error    string `json:"error"`
+		Messages []struct {
+			TS    string `json:"ts"`
+			Text  string `json:"text"`
+			User  string `json:"user"`
+			BotID string `json:"bot_id"`
+			Files []struct {
+				Mimetype   string `json:"mimetype"`
+				URLPrivate string `json:"url_private"`
+			} `json:"files"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		return nil, fmt.Errorf("slack: decoding response: %w", err)
+	}
+	if !parsed.OK {
+		return nil, fmt.Errorf("slack: conversations.replies failed: %s", parsed.Error)
+	}
+
+	messages := []interface{}{}
+	for _, m := range parsed.Messages {
+		// We post as the bot, so a caller's own sends come back here.
+		if m.BotID != "" || m.TS == threadTS {
+			continue
+		}
+		// "oldest" is inclusive, so the cursor message itself comes back.
+		if sinceTS != "" && !tsAfter(m.TS, sinceTS) {
+			continue
+		}
+		msg := map[string]interface{}{"ts": m.TS, "text": m.Text, "user": m.User}
+		if includeImages {
+			images, imageErrors := s.relayImages(ctx, m.Files)
+			msg["images"] = images
+			// A failed attachment must not drop its message, nor vanish.
+			if len(imageErrors) > 0 {
+				msg["image_errors"] = imageErrors
+			}
+		}
+		messages = append(messages, msg)
+	}
+	return map[string]interface{}{"ok": true, "messages": messages}, nil
+}
+
+// relayImages downloads image attachments, reporting any it could not fetch.
+func (s *slack) relayImages(ctx context.Context, files []struct {
+	Mimetype   string `json:"mimetype"`
+	URLPrivate string `json:"url_private"`
+}) (images, imageErrors []interface{}) {
+	images = []interface{}{}
+	imageErrors = []interface{}{}
+	for _, f := range files {
+		if !strings.HasPrefix(f.Mimetype, "image/") {
+			continue
+		}
+		dataURI, err := s.fetchImage(ctx, f.URLPrivate)
+		if err != nil {
+			imageErrors = append(imageErrors, err.Error())
+			continue
+		}
+		images = append(images, dataURI)
+	}
+	return images, imageErrors
+}
+
+// tsAfter reports whether Slack timestamp a is strictly newer than b.
+// Compared as text: as floats they lose the counter and same-second
+// messages compare equal.
+func tsAfter(a, b string) bool {
+	aSec, aRest, _ := strings.Cut(a, ".")
+	bSec, bRest, _ := strings.Cut(b, ".")
+	if len(aSec) != len(bSec) {
+		return len(aSec) > len(bSec)
+	}
+	if aSec != bSec {
+		return aSec > bSec
+	}
+	return aRest > bRest
+}
+
 func (s *slack) sendWebhook(ctx context.Context, text string, blocks interface{}) (map[string]interface{}, error) {
 	body := map[string]interface{}{}
 	if text != "" {
@@ -252,6 +400,36 @@ func (s *slack) post(ctx context.Context, url string, body map[string]interface{
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json; charset=utf-8")
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("slack: request failed: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("slack: reading response: %w", err)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("slack: http %d: %s", resp.StatusCode, string(data))
+	}
+	return data, nil
+}
+
+func (s *slack) get(ctx context.Context, endpoint string, query, headers map[string]string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	q := req.URL.Query()
+	for k, v := range query {
+		q.Set(k, v)
+	}
+	req.URL.RawQuery = q.Encode()
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
