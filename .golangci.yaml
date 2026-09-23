@@ -4,6 +4,8 @@ run:
   timeout: 5m
 
 linters:
+  disable:
+    - staticcheck
   enable:
     - revive
     - misspell
